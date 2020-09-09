@@ -22,6 +22,7 @@ repositories {
 }
 
 dependencies {
+    implementation 'com.google.guava:guava:29.0-jre'
     compile group: 'mysql', name: 'mysql-connector-java', version: '8.0.21'
     compile group: 'com.oracle.ojdbc', name: 'ojdbc8', version: '19.3.0.0'
     compile group: 'org.xerial', name: 'sqlite-jdbc', version: '3.32.3.2'
@@ -30,4 +31,8 @@ dependencies {
 application {
     // Define the main class for the application.
     mainClassName = 'net.nodium.coreprotecttologblock.Main'
+}
+
+run {
+    standardInput = System.in
 }
