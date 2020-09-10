@@ -58,6 +58,7 @@ public class Main {
                         "This operation will COMPLETELY DESTROY the following SQL tables in the specified server:\n" +
                         "\tminecraft.lb-materials\n" +
                         "\tminecraft.lb-%s-blocks\n" +
+                        "\tminecraft.lb-players\n" +
                         "Type \"yes\" to continue: ",
                 world
         );
@@ -70,13 +71,16 @@ public class Main {
             System.exit(1);
         }
 
+
         // create coreprotect db connection
         Connection connCoreProtect = DriverManager.getConnection("jdbc:sqlite:" + cpDb);
         System.out.println("opened SQLite db");
 
         // create logblock db connection
         Connection connLogBlock = DriverManager.getConnection("jdbc:mysql://localhost:3306/minecraft?user=root");
+//        Connection connLogBlock = DriverManager.getConnection(String.format("jdbc:mysql://%s:%d/%s?user=%s?password=%s"));
         System.out.println("connected to MySQL db");
+
 
         // declare and initialize coreprotect sql variables
         String queryCp;
@@ -102,6 +106,7 @@ public class Main {
             System.exit(1);
         }
 
+
         // get the number of rows
         queryCp = String.format("SELECT count(*) FROM main.co_block WHERE wid = %d", worldId);
         stmtCp = connCoreProtect.createStatement();
@@ -110,7 +115,8 @@ public class Main {
         int cpRows = rsCp.getInt(1);
         int currentRow = 1;
 
-        System.out.printf("CoreProtect table has %d rows\n", cpRows);
+        System.out.printf("coreprotect table has %d rows\n", cpRows);
+
 
         // set the logblock sql db to minecraft
         String queryLb = "USE minecraft;";
@@ -123,9 +129,12 @@ public class Main {
         stmtLb.execute(queryLb);
 
         // create the blocks table
-        queryLb = String.format("CREATE TABLE IF NOT EXISTS `lb-%s-blocks` %s", world, "(id INT UNSIGNED NOT NULL AUTO_INCREMENT, date DATETIME NOT NULL, playerid INT UNSIGNED NOT NULL, replaced SMALLINT UNSIGNED NOT NULL, replacedData SMALLINT NOT NULL, type SMALLINT UNSIGNED NOT NULL, typeData SMALLINT NOT NULL, x MEDIUMINT NOT NULL, y SMALLINT UNSIGNED NOT NULL, z MEDIUMINT NOT NULL, PRIMARY KEY (id), KEY coords (x, z, y), KEY date (date), KEY playerid (playerid))");
+        queryLb = String.format("CREATE TABLE IF NOT EXISTS `lb-%s-blocks` %s",
+                world,
+                "(id INT UNSIGNED NOT NULL AUTO_INCREMENT, date DATETIME NOT NULL, playerid INT UNSIGNED NOT NULL, replaced SMALLINT UNSIGNED NOT NULL, replacedData SMALLINT NOT NULL, type SMALLINT UNSIGNED NOT NULL, typeData SMALLINT NOT NULL, x MEDIUMINT NOT NULL, y SMALLINT UNSIGNED NOT NULL, z MEDIUMINT NOT NULL, PRIMARY KEY (id), KEY coords (x, z, y), KEY date (date), KEY playerid (playerid))");
         stmtLb = connLogBlock.createStatement();
         stmtLb.execute(queryLb);
+
 
         // copy the materials table
         queryCp = "SELECT * FROM main.co_material_map";
@@ -147,7 +156,9 @@ public class Main {
         while (rsCp.next()) {
 //            System.out.println(rsCp.getInt("id"));
 //            System.out.println(rsCp.getString("material"));
-            queryLb = String.format("INSERT IGNORE INTO `lb-materials` (id, name) VALUES (%d, '%s');", rsCp.getInt("id"), rsCp.getString("material"));
+            queryLb = String.format("INSERT IGNORE INTO `lb-materials` (id, name) VALUES (%d, '%s');",
+                    rsCp.getInt("id"),
+                    rsCp.getString("material"));
             stmtLb = connLogBlock.createStatement();
             stmtLb.execute(queryLb);
 
@@ -160,16 +171,51 @@ public class Main {
                 System.out.printf("air material index is: %d\n", airId);
             }
         }
+
         if (airId == -1) {
             System.err.println("Couldn't find air material in CoreProtect database.");
             System.exit(1);
         }
+
         System.out.println("copied materials table");
+
+
+        // copy the players table
+        queryCp = "SELECT * FROM main.co_user";
+        stmtCp = connCoreProtect.createStatement();
+        rsCp = stmtCp.executeQuery(queryCp);
+
+        // drop the table if it exists
+        queryLb = "DROP TABLE IF EXISTS `lb-players`;";
+        stmtLb = connLogBlock.createStatement();
+        stmtLb.execute(queryLb);
+
+        // create the blocks table
+        queryLb = "CREATE TABLE IF NOT EXISTS `lb-players` (playerid INT UNSIGNED NOT NULL AUTO_INCREMENT, UUID varchar(36) NOT NULL, playername varchar(32) NOT NULL, firstlogin DATETIME NOT NULL, lastlogin DATETIME NOT NULL, onlinetime INT UNSIGNED NOT NULL, ip varchar(255) NOT NULL, PRIMARY KEY (playerid), INDEX (UUID), INDEX (playername)) DEFAULT CHARSET utf8;";
+        stmtLb = connLogBlock.createStatement();
+        stmtLb.execute(queryLb);
+
+        while (rsCp.next()) {
+                queryLb = String.format("INSERT IGNORE INTO `lb-players` (playerid, UUID, playername, firstlogin, lastlogin, onlinetime, ip) VALUES (%d, '%s', '%s', 0, 0, 0, 0);",
+                        rsCp.getInt("id"),
+                        rsCp.getString("uuid"),
+                        rsCp.getString("user")
+                );
+                stmtLb = connLogBlock.createStatement();
+                stmtLb.execute(queryLb);
+        }
+
+        System.out.println("copied players table");
+
+
+        // finally, copy the blocks table
+        System.out.println("started copying blocks table");
 
         // mark the time that the process was started to see how long it takes
         long timeStart = System.nanoTime();
 
         // batch prepared statements
+        // i'm not sure if these actually speed up the program (compared to individually executing statements) or not.
         PreparedStatement psCp = connCoreProtect.prepareStatement("SELECT * FROM main.co_block LIMIT ? OFFSET ?");
         PreparedStatement psLb = connLogBlock.prepareStatement(String.format("INSERT INTO `lb-%s-blocks` (date, playerid, replaced, replaceddata, type, typedata, x, y, z) VALUES (FROM_UNIXTIME(?), ?, ?, ?, ?, ?, ?, ?, ?)", world));
 
@@ -212,7 +258,7 @@ public class Main {
                 psLb.clearParameters();
 
                 psLb.setInt(1, cpTableBlocks.time);
-                psLb.setInt(2, 1);
+                psLb.setInt(2, cpTableBlocks.user);
                 psLb.setInt(3, lbTableBlocks.replaced);
                 psLb.setInt(4, -1);
                 psLb.setInt(5, lbTableBlocks.type);
@@ -228,12 +274,15 @@ public class Main {
                     psLb.executeBatch();
                     writtenBatch = true;
                 }
+
                 if (currentRow % progressInterval == 1) {
                     printProgress(cpRows, currentRow, timeStart);
                 }
+
                 currentRow++;
             }
         }
+
         if (!writtenBatch) {
             psLb.executeBatch();
         }
@@ -242,6 +291,8 @@ public class Main {
         System.exit(0);
     }
 
+    // this performs the conversion for every row of the blocks database.
+    // i can't imagine this is the bottleneck for speed, but technically i haven't ruled it out
     public static LBTableBlocks cpToLb(CPTableBlocks cpTableBlocks, int airId) {
         LBTableBlocks lbTableBlocks = new LBTableBlocks();
 
@@ -262,6 +313,7 @@ public class Main {
         return lbTableBlocks;
     }
 
+    // surprisingly, java does not have a Math.clamp function
     public static int clamp(int i, int lower, int upper) {
         return Math.max(lower, Math.min(upper, i));
     }
